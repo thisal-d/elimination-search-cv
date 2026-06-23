@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elimination-search-cv"
+version = "0.0.0"
+authors = [
+  { name = "Thisal-D" }
+]
+
+license = { file = "LICENSE" }
+
+description = ""
+readme = "README.md"
+requires-python = ">=3.0"
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "License :: OSI Approved :: MIT License"
+]
+
+keywords = []
+
+[project.urls]
+homepage = "https://github.com/thisal-d/elimination-search-cv"
+repository = "https://github.com/thisal-d/elimination-search-cv"
+issues = "https://github.com/thisal-d/elimination-search-cv/issues"
