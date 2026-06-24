@@ -518,11 +518,28 @@ def main():
 
     md_content = "\n".join(md_lines)
 
+    # Save to history with settings and timestamp
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    rate_str = str(ELIMINATION_RATE).replace(".", "")
+    size_str = f"{SAMPLE_SIZE // 1000}k" if (SAMPLE_SIZE >= 1000 and SAMPLE_SIZE % 1000 == 0) else str(SAMPLE_SIZE)
+    history_filename = f"benchmark_results_cv{CV_FOLDS}_rate{rate_str}_size{size_str}_{timestamp}.md"
+    
+    history_dir = REPO_ROOT / "benchmarks" / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    history_path = history_dir / history_filename
+
+    # 1. Write to current static file (so README links stay valid)
     out_path = REPO_ROOT / "benchmarks" / "benchmark_results.md"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(md_content)
 
+    # 2. Write to history copy
+    with open(history_path, "w", encoding="utf-8") as f:
+        f.write(md_content)
+
     print(f"Results written to: {out_path}")
+    print(f"History copy saved to: {history_path}")
 
 
 if __name__ == "__main__":
