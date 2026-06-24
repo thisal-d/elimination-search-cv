@@ -1,0 +1,15 @@
+datasets
+results
+eda
+tests
+asd.py
+IT24102998 - logistic-regression.ipynb
+main-test.py
+test.ipynb
+test.py
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

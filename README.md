@@ -2,6 +2,8 @@
 
 An experimental hyperparameter search library for Scikit-Learn. The core idea is to **prune poorly-performing parameter values early**, before they pollute the rest of the search, rather than blindly evaluating every combination in the full grid. Whether this approach holds up across diverse models and datasets is something this project aims to find out.
 
+If the idea sounds interesting to you, a ⭐ on the repo goes a long way — it helps keep the motivation up to actually finish this.
+
 ---
 
 ## 💡 The Core Problem & Our Solution
@@ -101,45 +103,40 @@ param_grid = {
 }
 
 # --- 3. Initialize EliminationSearchCV ---
-#         Only the three confirmed parameters are shown here.
-#         Other parameters (e.g. cv, verbose, n_jobs) are not decided yet.
 search = EliminationSearchCV(
     estimator=model,
     param_grid=param_grid,
     scoring='accuracy',
+    cv=5,
 )
 
 # --- 4. Fit ---
 search.fit(X_train, y_train)
 
 # --- 5. Access Results ---
-#         Exact attribute names are still being figured out.
-#         The goal is to expose at least best_params_ and best_score_.
-print(search.best_params_)
-print(search.best_score_)
+#         best_params_ and best_score_ are not yet exposed — coming soon.
 ```
 
-### Confirmed Parameters
+### Current Parameters
 
-These three parameters are the foundation of the API. Their behaviour is settled:
+| Parameter | Type | Description |
+|---|---|---|
+| `estimator` | sklearn estimator | Any Scikit-Learn compatible estimator with a `fit` method. |
+| `param_grid` | `dict` | A dictionary mapping parameter names to lists of candidate values. |
+| `scoring` | `str` | The metric used to evaluate configurations. Supported: `accuracy`, `precision`, `recall`, `f1`, `roc_auc`. |
+| `cv` | `int` | Number of cross-validation folds. |
 
-| Parameter | Description |
-|---|---|
-| `estimator` | Any Scikit-Learn compatible estimator — something with a `fit` method. |
-| `param_grid` | A dictionary mapping parameter names to lists of values to search over. |
-| `scoring` | The metric used to evaluate and compare configurations (e.g. `'accuracy'`, `'f1'`). |
+### Not Yet Implemented
 
-### Everything Else — Not Decided Yet
-
-Parameters like `cv`, `verbose`, and `n_jobs` are not confirmed. They are common in `GridSearchCV` and will likely appear in some form, but the exact names, defaults, and behaviour are still being worked out during implementation.
-
-The same applies to post-fit attributes. The intention is to expose at least `best_params_` and `best_score_`, but the full attribute surface is TBD.
+- `best_params_` and `best_score_` attributes are not yet exposed (Phase 3 & 4 still in progress).
+- `verbose`, `n_jobs` parameters are planned but not yet added.
+- The elimination threshold and pruning logic (Phase 3) is the next thing being built.
 
 ---
 
 ## 🚧 Project Status: Early Stage, Building in Public
 
-`EliminationSearchCV` is at an early stage — the algorithm is designed, but the implementation has not started yet. This project is being built openly so that progress, decisions, and dead-ends are all visible.
+`EliminationSearchCV` is actively being implemented. The package structure is in place and the core dimension-isolation scoring loop (Phase 2) is running end-to-end on real data. The algorithm is being built and validated incrementally — what works today is committed, and what still needs work is tracked in the roadmap below.
 
 This might work out well, or it might turn out the elimination heuristic is too aggressive in some cases and misses good configurations. That is what testing and real benchmarks are for. If you are interested in the idea and want to follow along, contribute, or challenge the approach — feel free to open an issue or jump into the roadmap below.
 
@@ -147,19 +144,22 @@ This might work out well, or it might turn out the elimination heuristic is too 
 
 #### ✅ Foundation
 
-- [x] Initial project scaffolding (`pyproject.toml`, `src` layout, `LICENSE`)
+- [x] Initial project scaffolding (`pyproject.toml`, `LICENSE`)
 - [x] Core `README.md` drafted with algorithm description and API reference
 - [x] Repository made public and open for contributions
+- [x] Package structure migrated from `src/` layout to standalone `EliminationSearchCV/` package
 
 #### 🔨 Core Implementation
 
+- [x] Implement `EliminationSearchCV` class with `estimator`, `param_grid`, `scoring`, and `cv` parameters
+- [x] Implement cross-validated fold creation using `StratifiedKFold` / `KFold` (`create_cv_data_sets`)
+- [x] Implement scoring utilities for `accuracy`, `precision`, `recall`, `f1`, `roc_auc` (`get_model_score`)
+- [x] Implement **Phase 2**: Per-dimension hyperparameter isolation and cross-validated scoring (running end-to-end)
 - [ ] Implement abstract `BaseEliminationSearch` class with Scikit-Learn `BaseEstimator` compatibility
-- [ ] Implement `EliminationSearchCV` class extending the base class
 - [ ] Implement **Phase 1**: Anchor baseline configuration selection logic
-- [ ] Implement **Phase 2**: Per-dimension hyperparameter isolation and cross-validated scoring
 - [ ] Implement **Phase 3**: Elimination threshold logic and dynamic search space pruning
 - [ ] Implement **Phase 4**: Final focused sub-grid search over pruned parameter space
-- [ ] Expose `eliminated_params_` attribute for post-fit inspection of pruned values
+- [ ] Expose `best_params_`, `best_score_`, and `eliminated_params_` attributes post-fit
 - [ ] Ensure full compatibility with the `cv_results_` dictionary schema from `GridSearchCV`
 
 #### 🧪 Testing & Validation
@@ -215,5 +215,6 @@ You are free to use, copy, modify, merge, publish, distribute, sublicense, and/o
 ---
 
 <p align="center">
-  Started by <a href="https://github.com/thisal-d">Thisal-D</a>. A work in progress.
+  Started by <a href="https://github.com/thisal-d">Thisal-D</a>. A work in progress.<br>
+  If you find the idea useful or interesting, a ⭐ helps more than you might think.
 </p>
