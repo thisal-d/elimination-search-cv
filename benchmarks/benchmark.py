@@ -267,22 +267,18 @@ METRIC_LABELS = {
 
 
 def build_model_table(model_name: str, records: List[Dict]) -> str:
-    """One table per model. Columns: Dataset | n | Acc/F1/Prec/Rec (both) | Time | Speedup."""
+    """One table per model. Main columns: Dataset | n | Params Match? | Score Match? | Acc (both) | Time (both) | Speedup.
+    Secondary metrics (F1, Precision, Recall) are collapsible.
+    """
     lines = []
     lines.append(f"### {model_name}")
     lines.append("")
 
-    # Header
+    # Main Table: Comparison Summary
     lines.append(
-        "| Dataset | n | "
-        "Acc (Elim) | Acc (Grid) | "
-        "F1 (Elim) | F1 (Grid) | "
-        "Prec (Elim) | Prec (Grid) | "
-        "Rec (Elim) | Rec (Grid) | "
-        "Time (Elim) | Time (Grid) | "
-        "Speedup |"
+        "| Dataset | n | Params Match? | Score Match? | Acc (Elim) | Acc (Grid) | Time (Elim) | Time (Grid) | Speedup |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
 
     for r in records:
         e = r["elim"]
@@ -296,24 +292,78 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
                 return f"**{fmt(ev)}**"
             return fmt(ev)
 
+        # Check parameter matches
+        params_matched = e["params"] == g["params"]
+        params_match_str = "✅ Match" if params_matched else "❌ Diff"
+
+        # Check score matches
+        diff = e['metrics']['accuracy'] - g['metrics']['accuracy']
+        if abs(diff) < 1e-9:
+            score_match_str = "✅ Equal"
+        elif diff < 0:
+            score_match_str = f"❌ Lower ({diff:.4f})"
+        else:
+            score_match_str = f"🔥 Higher (+{diff:.4f})"
+
         speedup = g["time"] / e["time"] if e["time"] > 0 else 0
+
+        # Bold whichever time is faster
+        if e["time"] <= g["time"]:
+            time_elim_str = f"**{e['time']:.2f}s**"
+            time_grid_str = f"{g['time']:.2f}s"
+        else:
+            time_elim_str = f"{e['time']:.2f}s"
+            time_grid_str = f"**{g['time']:.2f}s**"
 
         lines.append(
             f"| {r['dataset']} | {r['n']:,} | "
+            f"{params_match_str} | "
+            f"{score_match_str} | "
             f"{winner(e['metrics']['accuracy'], g['metrics']['accuracy'])} | "
             f"{winner(g['metrics']['accuracy'], e['metrics']['accuracy'])} | "
+            f"{time_elim_str} | "
+            f"{time_grid_str} | "
+            f"**{speedup:.1f}x** |"
+        )
+
+    lines.append("")
+
+    # Collapsible Table: Secondary Metrics
+    lines.append("<details>")
+    lines.append("<summary><strong>📊 Secondary Metrics (F1, Precision, Recall)</strong></summary>")
+    lines.append("<br>")
+    lines.append("")
+    lines.append(
+        "| Dataset | F1 (Elim) | F1 (Grid) | Prec (Elim) | Prec (Grid) | Rec (Elim) | Rec (Grid) |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
+
+    for r in records:
+        e = r["elim"]
+        g = r["grid"]
+
+        def fmt(val):
+            return f"{val:.4f}"
+
+        def winner(ev, gv):
+            if ev >= gv:
+                return f"**{fmt(ev)}**"
+            return fmt(ev)
+
+        lines.append(
+            f"| {r['dataset']} | "
             f"{winner(e['metrics']['f1_macro'], g['metrics']['f1_macro'])} | "
             f"{winner(g['metrics']['f1_macro'], e['metrics']['f1_macro'])} | "
             f"{winner(e['metrics']['precision_macro'], g['metrics']['precision_macro'])} | "
             f"{winner(g['metrics']['precision_macro'], e['metrics']['precision_macro'])} | "
             f"{winner(e['metrics']['recall_macro'], g['metrics']['recall_macro'])} | "
-            f"{winner(g['metrics']['recall_macro'], e['metrics']['recall_macro'])} | "
-            f"**{e['time']:.2f}s** | "
-            f"{g['time']:.2f}s | "
-            f"**{speedup:.1f}x** |"
+            f"{winner(g['metrics']['recall_macro'], e['metrics']['recall_macro'])} |"
         )
 
     lines.append("")
+    lines.append("</details>")
+    lines.append("")
+
     return "\n".join(lines)
 
 
