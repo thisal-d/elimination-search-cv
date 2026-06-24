@@ -282,7 +282,7 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
         "Time (Elim) | Time (Grid) | "
         "Speedup |"
     )
-    lines.append("|---|---|" + "|---|---" * 5 + "|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
     for r in records:
         e = r["elim"]
