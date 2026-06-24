@@ -8,7 +8,7 @@ class EliminationSearchCV:
     parameter values across multiple rounds of cross-validated evaluation.
 
     In each round, parameter combinations of increasing complexity are scored.
-    Low-scoring values are pruned from the search grid based on ``reduce_rate``,
+    Low-scoring values are pruned from the search grid based on ``elimination_rate``,
     narrowing the search space before the next round begins.
 
     Args:
@@ -28,7 +28,7 @@ class EliminationSearchCV:
             ``'accuracy'``, ``'precision'``, ``'recall'``, ``'f1'``,
             ``'roc_auc'``.
         cv: Number of cross-validation folds. Defaults to ``5``.
-        reduce_rate: Fraction of low-scoring values to drop after each round.
+        elimination_rate: Fraction of low-scoring values to drop after each round.
             Must be in ``[0.0, 1.0)``. Defaults to ``0.8`` (keep best 20%).
 
     Attributes:
@@ -43,13 +43,13 @@ class EliminationSearchCV:
         param_grid: Dict[str, List],
         scoring: str,
         cv: int = 5,
-        reduce_rate: float = 0.8,
+        elimination_rate: float = 0.8,
     ):
         self.estimator = estimator
         self.param_grid = param_grid
         self.scoring = scoring
         self.cv = cv
-        self.reduce_rate = reduce_rate
+        self.elimination_rate = elimination_rate
 
         # Working copy of the grid — shrinks each round as values are pruned.
         self._active_param_grid: Dict[str, List] = dict(param_grid)
@@ -114,20 +114,20 @@ class EliminationSearchCV:
 
         **Round 1** (each candidate has exactly 1 key-value pair):
             Each parameter is evaluated independently. The bottom
-            ``reduce_rate`` fraction of values are dropped per parameter.
+            ``elimination_rate`` fraction of values are dropped per parameter.
 
-            Example (reduce_rate=0.8, keep best 20%):
+            Example (elimination_rate=0.8, keep best 20%):
 
             Input  active_grid['C'] = [0.001, 0.01, 0.1, 1, 10, 100]
                    scores            = [0.70,  0.72, 0.75, 0.90, 0.88, 0.85]
             Output active_grid['C'] = [1]   ← top 20% of 6 values = 1 value
 
         **Later rounds** (each candidate has 2+ key-value pairs):
-            All candidates are ranked globally. The top ``(1 - reduce_rate)``
+            All candidates are ranked globally. The top ``(1 - elimination_rate)``
             fraction is kept. Parameters not present in any kept candidate
             retain their current values unchanged.
 
-            Example (reduce_rate=0.8, keep best 20% of 10 combinations):
+            Example (elimination_rate=0.8, keep best 20% of 10 combinations):
 
             Input  candidates = [{C:1, penalty:'l1'}, {C:10, penalty:'l2'}, …]
             Kept   top 2 → unique values extracted per parameter
@@ -153,7 +153,7 @@ class EliminationSearchCV:
         """Eliminate low-scoring values per-parameter independently (Round 1).
 
         Builds a score map for each (parameter, value) pair, then keeps only
-        the top ``(1 - reduce_rate)`` values for each parameter.
+        the top ``(1 - elimination_rate)`` values for each parameter.
 
         Args:
             candidates: Single-key dicts, e.g. ``[{'C': 0.1}, {'C': 1}, …]``.
@@ -179,7 +179,7 @@ class EliminationSearchCV:
         # Step 2: For each parameter, sort its values by score and keep the top fraction.
         #
         # Before: param_value_scores['C'] = {0.01: 0.72, 0.1: 0.75, 1: 0.90, 10: 0.88, …}
-        #         n_total=6, reduce_rate=0.8 → n_keep = max(1, round(6*0.2)) = 1
+        #         n_total=6, elimination_rate=0.8 → n_keep = max(1, round(6*0.2)) = 1
         #
         # After:  active_grid['C'] = [1]
         new_grid: Dict[str, List] = {}
@@ -194,7 +194,7 @@ class EliminationSearchCV:
             sorted_by_score = sorted(
                 value_score_map.items(), key=lambda kv: kv[1], reverse=True
             )
-            n_keep = max(1, round(n_total * (1 - self.reduce_rate)))
+            n_keep = max(1, round(n_total * (1 - self.elimination_rate)))
             new_grid[param_key] = [value for value, _ in sorted_by_score[:n_keep]]
 
         self._active_param_grid = new_grid
@@ -206,7 +206,7 @@ class EliminationSearchCV:
     ) -> None:
         """Eliminate low-scoring values by global combination ranking (Rounds 2+).
 
-        Sorts all candidates by score, keeps the top ``(1 - reduce_rate)``
+        Sorts all candidates by score, keeps the top ``(1 - elimination_rate)``
         fraction, and restricts each parameter to the values seen in those
         top candidates. Parameters absent from all top candidates keep their
         current values (they are not zeroed out).
@@ -217,12 +217,12 @@ class EliminationSearchCV:
             scores: Score for each candidate, parallel to ``candidates``.
         """
         n_total = len(candidates)
-        n_keep = max(1, round(n_total * (1 - self.reduce_rate)))
+        n_keep = max(1, round(n_total * (1 - self.elimination_rate)))
 
         # Step 1: Rank all candidates and keep the top fraction.
         #
         # Before: 10 combinations with scores [0.80, 0.90, 0.75, …]
-        # After:  kept_candidates = top 2 combinations (n_keep=2 for reduce_rate=0.8)
+        # After:  kept_candidates = top 2 combinations (n_keep=2 for elimination_rate=0.8)
         ranked = sorted(zip(candidates, scores), key=lambda cs: cs[1], reverse=True)
         kept_candidates = [candidate for candidate, _ in ranked[:n_keep]]
 

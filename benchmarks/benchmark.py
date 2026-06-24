@@ -137,11 +137,11 @@ MODELS = {
 # ---------------------------------------------------------------------------
 # Benchmark settings
 # ---------------------------------------------------------------------------
-CV_FOLDS     = 5
-REDUCE_RATE  = 0.8
+CV_FOLDS     = 1
+ELIMINATION_RATE  = 0.8
 PRIMARY_SCORING = "accuracy"          # used during search
 EVAL_METRICS    = ["accuracy", "f1_macro", "precision_macro", "recall_macro"]
-SAMPLE_SIZE  = 5_000
+SAMPLE_SIZE  = 20_000
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ def run_elimination(estimator, param_grid, X, y):
         param_grid=param_grid,
         scoring=PRIMARY_SCORING,
         cv=CV_FOLDS,
-        reduce_rate=REDUCE_RATE,
+        elimination_rate=ELIMINATION_RATE,
     )
     t0 = time.perf_counter()
     search.fit(X, y)
@@ -268,7 +268,7 @@ METRIC_LABELS = {
 
 def build_model_table(model_name: str, records: List[Dict]) -> str:
     """One table per model. Main columns: Dataset | n | Params Match? | Score Match? | Acc (both) | Time (both) | Speedup.
-    Secondary metrics (F1, Precision, Recall) are collapsible.
+    Secondary metrics (F1, Precision, Recall) and detailed best parameters are collapsible.
     """
     lines = []
     lines.append(f"### {model_name}")
@@ -292,8 +292,8 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
                 return f"**{fmt(ev)}**"
             return fmt(ev)
 
-        # Check parameter matches
-        params_matched = e["params"] == g["params"]
+        # Check parameter matches (order-independent key-value check after sorting)
+        params_matched = dict(sorted(e["params"].items())) == dict(sorted(g["params"].items()))
         params_match_str = "✅ Match" if params_matched else "❌ Diff"
 
         # Check score matches
@@ -328,10 +328,26 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
 
     lines.append("")
 
-    # Collapsible Table: Secondary Metrics
+    # Collapsible Table: Best Params & Secondary Metrics
     lines.append("<details>")
-    lines.append("<summary><strong>📊 Secondary Metrics (F1, Precision, Recall)</strong></summary>")
+    lines.append("<summary><strong>🔍 View Selected Hyperparameters & Secondary Metrics</strong></summary>")
     lines.append("<br>")
+    lines.append("")
+    lines.append("#### ⚙️ Selected Best Parameters")
+    lines.append("")
+    lines.append("| Dataset | EliminationSearchCV | GridSearchCV |")
+    lines.append("|---|---|---|")
+
+    for r in records:
+        e = r["elim"]
+        g = r["grid"]
+        # Sort keys alphabetically to guarantee order consistency
+        ep = ", ".join(f"{k}={v}" for k, v in sorted(e["params"].items()))
+        gp = ", ".join(f"{k}={v}" for k, v in sorted(g["params"].items()))
+        lines.append(f"| {r['dataset']} | `{ep}` | `{gp}` |")
+
+    lines.append("")
+    lines.append("#### 📊 Secondary Metrics (F1, Precision, Recall)")
     lines.append("")
     lines.append(
         "| Dataset | F1 (Elim) | F1 (Grid) | Prec (Elim) | Prec (Grid) | Rec (Elim) | Rec (Grid) |"
@@ -405,30 +421,6 @@ def build_speed_summary(all_records: List[Dict]) -> str:
     return "\n".join(lines)
 
 
-def build_params_section(all_records: List[Dict]) -> str:
-    """Collapsible section with best params per dataset per model."""
-    lines = [
-        "<details>",
-        "<summary><strong>Best Params Found (click to expand)</strong></summary>",
-        "",
-    ]
-    for model_name in MODELS:
-        recs = [r for r in all_records if r["model"] == model_name]
-        if not recs:
-            continue
-        lines.append(f"#### {model_name}")
-        lines.append("")
-        lines.append("| Dataset | EliminationSearchCV | GridSearchCV |")
-        lines.append("|---|---|---|")
-        for r in recs:
-            ep = ", ".join(f"{k}={v}" for k, v in r["elim"]["params"].items())
-            gp = ", ".join(f"{k}={v}" for k, v in r["grid"]["params"].items())
-            lines.append(f"| {r['dataset']} | `{ep}` | `{gp}` |")
-        lines.append("")
-    lines.append("</details>")
-    lines.append("")
-    return "\n".join(lines)
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -437,8 +429,8 @@ def build_params_section(all_records: List[Dict]) -> str:
 def main():
     print("=" * 70)
     print("EliminationSearchCV vs GridSearchCV -- Benchmark")
-    print(f"cv={CV_FOLDS}, reduce_rate={REDUCE_RATE}, "
-          f"primary_scoring={PRIMARY_SCORING}, sample_size={SAMPLE_SIZE:,}")
+    print(f"cv={CV_FOLDS}, elimination_rate={ELIMINATION_RATE}, ")
+    print(f"primary_scoring={PRIMARY_SCORING}, sample_size={SAMPLE_SIZE:,}")
     print("=" * 70)
 
     all_records = []
@@ -497,7 +489,7 @@ def main():
     md_lines = [
         "# Benchmark Results — EliminationSearchCV vs GridSearchCV",
         "",
-        f"> **Settings:** `cv={CV_FOLDS}` · `reduce_rate={REDUCE_RATE}` · "
+        f"> **Settings:** `cv={CV_FOLDS}` · `elimination_rate={ELIMINATION_RATE}` · "
         f"`primary_scoring={PRIMARY_SCORING}` · `sample_size={SAMPLE_SIZE:,}`  ",
         "> **Bold** = winner for that metric. Reproduce with `python benchmarks/benchmark.py`.",
         "",
@@ -518,9 +510,6 @@ def main():
     md_lines.append(build_speed_summary(all_records))
     md_lines.append("---")
     md_lines.append("")
-
-    # Params (collapsible)
-    md_lines.append(build_params_section(all_records))
 
     md_lines += [
         "> Environment: Python 3.12, scikit-learn, Windows 11",

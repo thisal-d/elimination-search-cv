@@ -39,7 +39,7 @@ param_grid = {
 # Full GridSearchCV: 6 × 2 × 2 × 2 = 48 combinations × 5 folds = 240 fits
 ```
 
-`EliminationSearchCV` with `reduce_rate=0.8` (keep best 20%):
+`EliminationSearchCV` with `elimination_rate=0.8` (keep best 20%):
 
 | Round | Combinations tested | Grid after elimination |
 |-------|--------------------|-----------------------|
@@ -86,7 +86,7 @@ EliminationSearchCV.fit(X, y)
 | Decision | Rationale |
 |---|---|
 | **Per-parameter elimination in Round 1** | Each param is scored in isolation so its values are compared fairly, without interference from other params |
-| **Global ranking in later rounds** | Multi-param combos are ranked by total cross-validated score; the top `(1-reduce_rate)` fraction survives |
+| **Global ranking in later rounds** | Multi-param combos are ranked by total cross-validated score; the top `(1-elimination_rate)` fraction survives |
 | **Params not in any kept combo are preserved** | Prevents a parameter from being wiped out just because it wasn't part of the top-ranked 2-param pairs |
 | **Invalid combos score `0.0`** | Incompatible combinations (e.g. `penalty='l1'` + `solver='lbfgs'`) are caught and naturally eliminated |
 | **Always keep ≥ 1 value per param** | Prevents the grid from collapsing to an empty state |
@@ -144,7 +144,7 @@ search = EliminationSearchCV(
     param_grid=param_grid,
     scoring='accuracy',
     cv=5,
-    reduce_rate=0.8,   # eliminate worst 80% each round, keep best 20%
+    elimination_rate=0.8,   # eliminate worst 80% each round, keep best 20%
 )
 search.fit(X_train, y_train)
 
@@ -166,7 +166,7 @@ best_model.fit(X_train, y_train)
 | `param_grid` | `Dict[str, List]` | *required* | Parameter names mapped to candidate value lists. |
 | `scoring` | `str` | *required* | Evaluation metric. See supported values below. |
 | `cv` | `int` | `5` | Number of cross-validation folds. |
-| `reduce_rate` | `float` | `0.8` | Fraction of values to eliminate per round. Must be in `[0.0, 1.0)`. |
+| `elimination_rate` | `float` | `0.8` | Fraction of values to eliminate per round. Must be in `[0.0, 1.0)`. |
 
 ### Result Attributes
 
@@ -207,7 +207,7 @@ best_model.fit(X_train, y_train)
 > **Experimental.** Results vary by dataset and hyperparameter grid. Run `python benchmarks/benchmark.py` to reproduce.
 > Full detailed per-dataset tables → **[benchmark_results.md](./benchmarks/benchmark_results.md)**
 
-**Settings:** `cv=5` · `reduce_rate=0.8` · `primary_scoring=accuracy` · `sample_size=5,000`  
+**Settings:** `cv=5` · `elimination_rate=0.8` · `primary_scoring=accuracy` · `sample_size=20,000`  
 **Models tested:** LogisticRegression · RandomForest · DecisionTree · KNeighbors · GradientBoosting  
 **Metrics tracked:** Accuracy · F1 (macro) · Precision (macro) · Recall (macro) · Time (s) · Speedup  
 
@@ -217,17 +217,17 @@ The table below shows average search times and accuracy differences compared to 
 
 | Model | Grid Combos | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |
 |---|---|---|---|---|---|
-| **LogisticRegression** | 40 | **0.57s** | 2.11s | **4.4x** | -0.0104 |
-| **RandomForest** | 27 | **10.21s** | 10.14s | **1.0x** | -0.0060 |
-| **DecisionTree** | 24 | **0.24s** | 0.17s | **0.8x** | -0.0017 |
-| **KNeighbors** | 16 | **1.33s** | 0.45s | **0.4x** | -0.0035 |
-| **GradientBoosting** | 18 | **11.86s** | 8.93s | **0.8x** | -0.0072 |
+| **LogisticRegression** | 40 | **0.93s** | 3.04s | **5.1x** | -0.0104 |
+| **RandomForest** | 27 | **13.95s** | 15.82s | **1.1x** | -0.0060 |
+| **DecisionTree** | 24 | **0.46s** | 0.38s | **0.9x** | -0.0015 |
+| **KNeighbors** | 16 | **3.49s** | 2.02s | **0.5x** | -0.0029 |
+| **GradientBoosting** | 18 | **22.82s** | 17.30s | **0.8x** | -0.0072 |
 
 > **Key Findings:**
 > 1. **High-dimensional grids (LogisticRegression)** show a **4.4x speedup** with minimal accuracy trade-off (~1%).
 > 2. **Fast models (KNeighbors, DecisionTree)** have very low individual fit overhead, meaning the logic overhead of elimination doesn't pay off for small search spaces.
 > 3. **Heavy models (RandomForest, GradientBoosting)** show comparable runtimes at this grid size, but we expect higher speedups on larger grids.
-> 4. **Small datasets:** On very small datasets (e.g. Heart Failure, n=299), cross-validation score noise makes the 80% elimination rate too aggressive. We recommend using a lower `reduce_rate` (e.g., `0.5`) for datasets under 500 rows.
+> 4. **Small datasets:** On very small datasets (e.g. Heart Failure, n=299), cross-validation score noise makes the 80% elimination rate too aggressive. We recommend using a lower `elimination_rate` (e.g., `0.5`) for datasets under 500 rows.
 
 ---
 
