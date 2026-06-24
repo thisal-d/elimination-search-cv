@@ -1,4 +1,6 @@
+# files i use to test
 datasets
+benchmarks/datasets/
 results
 eda
 tests
@@ -12,4 +14,4 @@ test.py
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
+*.pyd
