@@ -5,6 +5,8 @@ from sklearn.metrics import (
     f1_score, confusion_matrix, roc_auc_score, roc_curve)
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.model_selection import train_test_split
+from itertools import combinations, product
+from typing import Dict, List
 
 
 def generate_param_combinations(param_grid: Dict) -> List[Dict]:
@@ -12,6 +14,23 @@ def generate_param_combinations(param_grid: Dict) -> List[Dict]:
     values = param_grid.values()
     combinations = list(itertools.product(*values))
     return [dict(zip(keys, combination)) for combination in combinations]
+
+
+
+def generate_param_combinations_with_limit(
+    param_grid: Dict,
+    limit: int = 1
+) -> List[Dict]:
+
+    result = []
+
+    for selected_keys in combinations(param_grid.keys(), limit):
+        selected_values = [param_grid[key] for key in selected_keys]
+
+        for values in product(*selected_values):
+            result.append(dict(zip(selected_keys, values)))
+
+    return result
 
 
 def train_model(model, train_X, train_y):
