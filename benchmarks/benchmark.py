@@ -1,27 +1,25 @@
 """
-benchmark.py — EliminationSearchCV vs GridSearchCV
-====================================================
-Runs a head-to-head comparison across multiple real-world classification
-datasets and models. Records accuracy, F1, precision, recall, wall-clock
-time, and total model fits. Outputs a GitHub-compatible Markdown report.
+benchmark.py — Primary EliminationSearchCV vs GridSearchCV Benchmark
+======================================================================
+Runs a rigorous head-to-head comparison between EliminationSearchCV and
+GridSearchCV. Specifically compares how both algorithms scale from small
+(Light) to large (Full) parameter grids on the two largest datasets (Diabetes, Stroke).
 
 Usage:
     python benchmarks/benchmark.py
-
-Reproduce results:
-    python benchmarks/benchmark.py > benchmark_output.txt
-
-Requirements:
-    pip install scikit-learn pandas numpy
-    Datasets in './benchmarks/datasets/'
 """
 
-import time
 import os
 import sys
+import time
+import datetime
 import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+
+# Suppress all python warnings globally and inside child processes
+os.environ["PYTHONWARNINGS"] = "ignore"
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
@@ -30,39 +28,20 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import GridSearchCV, cross_val_score, train_test_split
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.model_selection import GridSearchCV, cross_validate, train_test_split
+from sklearn.metrics import accuracy_score
 
-warnings.filterwarnings("ignore")
-
-# ---------------------------------------------------------------------------
 # Path setup
-# ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from EliminationSearchCV import EliminationSearchCV
 
-
 # ---------------------------------------------------------------------------
-# Dataset definitions
+# Dataset definitions (Two largest datasets)
 # ---------------------------------------------------------------------------
 DATASET_DIR = REPO_ROOT / "benchmarks" / "datasets"
 
 DATASETS = {
-    "Heart Failure": {
-        "path": DATASET_DIR / "heart_failure_clinical_records_dataset.csv",
-        "target": "DEATH_EVENT",
-        "drop": [],
-        "sep": ",",
-        "categorical": [],
-    },
-    "Cancer Level": {
-        "path": DATASET_DIR / "cancer patient data sets.csv",
-        "target": "Level",
-        "drop": ["index", "Patient Id"],
-        "sep": ",",
-        "categorical": [],
-    },
     "Diabetes": {
         "path": DATASET_DIR / "diabetes_prediction_dataset.csv",
         "target": "diabetes",
@@ -78,71 +57,125 @@ DATASETS = {
         "categorical": ["gender", "ever_married", "work_type",
                         "Residence_type", "smoking_status"],
     },
-    "Divorce": {
-        "path": DATASET_DIR / "divorce_data.csv",
-        "target": "Divorce",
-        "drop": [],
-        "sep": ";",
+    "Cancer Level": {
+        "path": DATASET_DIR / "cancer patient data sets.csv",
+        "target": "Level",
+        "drop": ["index", "Patient Id"],
+        "sep": ",",
         "categorical": [],
     },
 }
 
 # ---------------------------------------------------------------------------
-# Model + param grid definitions (5 models)
+# Hyperparameter Grids (Full vs Light)
 # ---------------------------------------------------------------------------
-MODELS = {
+
+FULL_MODELS = {
     "LogisticRegression": {
         "estimator": LogisticRegression(random_state=42),
         "param_grid": {
-            "C":        [0.01, 0.1, 1, 10, 100],
-            "penalty":  ["l1", "l2"],
-            "solver":   ["liblinear", "saga"],
-            "max_iter": [500, 1000],
+            "C":             [0.001, 0.01, 0.1, 1, 10, 100, 1000],
+            "penalty":       ["l1", "l2"],
+            "solver":        ["liblinear", "saga"],
+            "fit_intercept": [True, False],
+            "class_weight":  [None, "balanced"],
+            "max_iter":      [100, 500, 1000],
         },
     },
     "RandomForest": {
         "estimator": RandomForestClassifier(random_state=42, n_jobs=-1),
         "param_grid": {
-            "n_estimators":      [50, 100, 200],
-            "max_depth":         [None, 5, 10],
-            "min_samples_split": [2, 5, 10],
+            "n_estimators":      [10, 50, 100, 200, 300],
+            "max_depth":         [None, 5, 10, 15, 20],
+            "min_samples_split": [2, 5, 10, 15],
+            "min_samples_leaf":  [1, 2, 4, 8],
+            "max_features":      ["sqrt", "log2", None],
+            "criterion":         ["gini", "entropy", "log_loss"],
         },
     },
     "DecisionTree": {
         "estimator": DecisionTreeClassifier(random_state=42),
         "param_grid": {
-            "max_depth":         [None, 5, 10, 20],
-            "min_samples_split": [2, 5, 10],
-            "criterion":         ["gini", "entropy"],
+            "max_depth":         [None, 3, 5, 10, 15, 20, 30],
+            "min_samples_split": [2, 5, 10, 15, 20],
+            "min_samples_leaf":  [1, 2, 4, 8, 12],
+            "criterion":         ["gini", "entropy", "log_loss"],
+            "max_features":      [None, "sqrt", "log2"],
+            "splitter":          ["best", "random"],
         },
     },
     "KNeighbors": {
         "estimator": KNeighborsClassifier(),
         "param_grid": {
-            "n_neighbors": [3, 5, 9, 15],
+            "n_neighbors": [1, 3, 5, 7, 9, 11, 15, 21, 31],
             "weights":     ["uniform", "distance"],
-            "metric":      ["euclidean", "manhattan"],
+            "metric":      ["euclidean", "manhattan", "minkowski", "chebyshev"],
+            "algorithm":   ["auto", "ball_tree", "kd_tree", "brute"],
+            "p":           [1, 2, 3],
         },
     },
     "GradientBoosting": {
         "estimator": GradientBoostingClassifier(random_state=42),
         "param_grid": {
-            "n_estimators":  [50, 100, 200],
-            "learning_rate": [0.05, 0.1, 0.2],
-            "max_depth":     [3, 5],
+            "n_estimators":      [50, 100, 150, 200, 300],
+            "learning_rate":     [0.01, 0.05, 0.1, 0.15, 0.2],
+            "max_depth":         [3, 4, 5, 6, 8],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf":  [1, 2, 4],
+            "subsample":         [0.6, 0.8, 1.0],
+        },
+    },
+}
+
+LIGHT_MODELS = {
+    "LogisticRegression": {
+        "estimator": LogisticRegression(random_state=42),
+        "param_grid": {
+            "C":             [0.1, 1.0, 10.0],
+            "penalty":       ["l2"],
+            "solver":        ["liblinear"],
+        },
+    },
+    "RandomForest": {
+        "estimator": RandomForestClassifier(random_state=42, n_jobs=-1),
+        "param_grid": {
+            "n_estimators":      [10, 50],
+            "max_depth":         [None, 5],
+        },
+    },
+    "DecisionTree": {
+        "estimator": DecisionTreeClassifier(random_state=42),
+        "param_grid": {
+            "max_depth":         [None, 5],
+            "min_samples_split": [2, 5],
+        },
+    },
+    "KNeighbors": {
+        "estimator": KNeighborsClassifier(),
+        "param_grid": {
+            "n_neighbors": [3, 5],
+            "weights":     ["uniform", "distance"],
+        },
+    },
+    "GradientBoosting": {
+        "estimator": GradientBoostingClassifier(random_state=42),
+        "param_grid": {
+            "n_estimators":      [50],
+            "learning_rate":     [0.1],
+            "max_depth":         [3],
         },
     },
 }
 
 # ---------------------------------------------------------------------------
-# Benchmark settings
+# Benchmark configurations (Adjust settings here)
 # ---------------------------------------------------------------------------
-CV_FOLDS     = 1
-ELIMINATION_RATE  = 0.8
-PRIMARY_SCORING = "accuracy"          # used during search
-EVAL_METRICS    = ["accuracy", "f1_macro", "precision_macro", "recall_macro"]
-SAMPLE_SIZE  = 20_000
-
+BENCHMARK_VERSION = "0.0.1"           # Version of EliminationSearchCV
+CV_FOLDS = 2                          # CV folds (1 for predefined single train/val split)
+ELIMINATION_RATE = 0.8               # Elimination rate
+PRIMARY_SCORING = "accuracy"          # Primary scoring metric
+EVAL_METRICS = ["accuracy"]           # Target only one scoring metric for speed
+SAMPLE_SIZE = 10000                    # Sampling threshold for big datasets
 
 # ---------------------------------------------------------------------------
 # Data loading & preprocessing
@@ -167,7 +200,7 @@ def load_and_preprocess(cfg: Dict) -> Tuple[np.ndarray, np.ndarray, str]:
     if y_raw.dtype == object:
         le = LabelEncoder()
         y = le.fit_transform(y_raw)
-        notes.append(f"target label-encoded")
+        notes.append("target label-encoded")
     else:
         y = y_raw.values
 
@@ -196,21 +229,19 @@ def load_and_preprocess(cfg: Dict) -> Tuple[np.ndarray, np.ndarray, str]:
 
     return X, y, "; ".join(notes) if notes else "no transforms"
 
-
 # ---------------------------------------------------------------------------
 # Scoring helper
 # ---------------------------------------------------------------------------
 
 def evaluate_params(estimator, best_params: Dict, X, y) -> Dict[str, float]:
-    """Evaluate best_params across all EVAL_METRICS using cross_val_score."""
+    """Evaluate best_params across EVAL_METRICS using a single pass of cross_validate."""
     model = type(estimator)(**{**estimator.get_params(), **best_params})
+    scores = cross_validate(model, X, y, cv=CV_FOLDS, scoring=EVAL_METRICS, error_score=0.0)
     results = {}
     for metric in EVAL_METRICS:
-        scores = cross_val_score(model, X, y, cv=CV_FOLDS,
-                                 scoring=metric, error_score=0.0)
-        results[metric] = float(scores.mean())
+        val = scores[f"test_{metric}"]
+        results[metric] = float(val.mean()) if len(val) > 0 else 0.0
     return results
-
 
 # ---------------------------------------------------------------------------
 # Search runners
@@ -232,11 +263,25 @@ def run_elimination(estimator, param_grid, X, y):
 
 
 def run_grid_search(estimator, param_grid, X, y):
+    if CV_FOLDS == 1:
+        indices = np.arange(len(X))
+        try:
+            train_idx, val_idx = train_test_split(
+                indices, test_size=0.2, random_state=42, stratify=y
+            )
+        except Exception:
+            train_idx, val_idx = train_test_split(
+                indices, test_size=0.2, random_state=42
+            )
+        cv_split = [(train_idx, val_idx)]
+    else:
+        cv_split = CV_FOLDS
+
     gs = GridSearchCV(
         estimator=estimator,
         param_grid=param_grid,
         scoring=PRIMARY_SCORING,
-        cv=CV_FOLDS,
+        cv=cv_split,
         error_score=0.0,
         n_jobs=-1,
     )
@@ -253,34 +298,25 @@ def grid_total_fits(param_grid: Dict) -> int:
         n *= len(v)
     return n * CV_FOLDS
 
-
 # ---------------------------------------------------------------------------
 # Markdown report builder
 # ---------------------------------------------------------------------------
 
-METRIC_LABELS = {
-    "accuracy":         "Accuracy",
-    "f1_macro":         "F1",
-    "precision_macro":  "Precision",
-    "recall_macro":     "Recall",
-}
-
-
 def build_model_table(model_name: str, records: List[Dict]) -> str:
-    """One table per model. Main columns: Dataset | n | Params Match? | Score Match? | Acc (both) | Time (both) | Speedup.
-    Secondary metrics (F1, Precision, Recall) and detailed best parameters are collapsible.
-    """
+    """Creates a table comparing results side-by-side for Light and Full grids."""
     lines = []
     lines.append(f"### {model_name}")
     lines.append("")
 
-    # Main Table: Comparison Summary
     lines.append(
-        "| Dataset | n | Params Match? | Score Match? | Acc (Elim) | Acc (Grid) | Time (Elim) | Time (Grid) | Speedup |"
+        "| Dataset | Grid Size | Params Match? | Score Match? | Acc (Elim) | Acc (Grid) | Time (Elim) | Time (Grid) | Speedup |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|")
 
-    for r in records:
+    # Order records logically (Dataset name, then Light first, then Full)
+    sorted_recs = sorted(records, key=lambda x: (x["dataset"], x["grid_type"] == "Full"))
+
+    for r in sorted_recs:
         e = r["elim"]
         g = r["grid"]
 
@@ -292,12 +328,12 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
                 return f"**{fmt(ev)}**"
             return fmt(ev)
 
-        # Check parameter matches (order-independent key-value check after sorting)
         params_matched = dict(sorted(e["params"].items())) == dict(sorted(g["params"].items()))
         params_match_str = "✅ Match" if params_matched else "❌ Diff"
 
-        # Check score matches
-        diff = e['metrics']['accuracy'] - g['metrics']['accuracy']
+        elim_score = e['metrics']['accuracy']
+        grid_score = g['metrics']['accuracy']
+        diff = elim_score - grid_score
         if abs(diff) < 1e-9:
             score_match_str = "✅ Equal"
         elif diff < 0:
@@ -307,7 +343,6 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
 
         speedup = g["time"] / e["time"] if e["time"] > 0 else 0
 
-        # Bold whichever time is faster
         if e["time"] <= g["time"]:
             time_elim_str = f"**{e['time']:.2f}s**"
             time_grid_str = f"{g['time']:.2f}s"
@@ -316,65 +351,32 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
             time_grid_str = f"**{g['time']:.2f}s**"
 
         lines.append(
-            f"| {r['dataset']} | {r['n']:,} | "
+            f"| {r['dataset']} | {r['grid_type']} | "
             f"{params_match_str} | "
             f"{score_match_str} | "
-            f"{winner(e['metrics']['accuracy'], g['metrics']['accuracy'])} | "
-            f"{winner(g['metrics']['accuracy'], e['metrics']['accuracy'])} | "
+            f"{winner(elim_score, grid_score)} | "
+            f"{winner(grid_score, elim_score)} | "
             f"{time_elim_str} | "
             f"{time_grid_str} | "
             f"**{speedup:.1f}x** |"
         )
 
     lines.append("")
-
-    # Collapsible Table: Best Params & Secondary Metrics
     lines.append("<details>")
-    lines.append("<summary><strong>🔍 View Selected Hyperparameters & Secondary Metrics</strong></summary>")
+    lines.append("<summary><strong>🔍 View Selected Hyperparameters</strong></summary>")
     lines.append("<br>")
     lines.append("")
     lines.append("#### ⚙️ Selected Best Parameters")
     lines.append("")
-    lines.append("| Dataset | EliminationSearchCV | GridSearchCV |")
-    lines.append("|---|---|---|")
+    lines.append("| Dataset | Grid Size | EliminationSearchCV | GridSearchCV |")
+    lines.append("|---|---|---|---|")
 
-    for r in records:
+    for r in sorted_recs:
         e = r["elim"]
         g = r["grid"]
-        # Sort keys alphabetically to guarantee order consistency
         ep = ", ".join(f"{k}={v}" for k, v in sorted(e["params"].items()))
         gp = ", ".join(f"{k}={v}" for k, v in sorted(g["params"].items()))
-        lines.append(f"| {r['dataset']} | `{ep}` | `{gp}` |")
-
-    lines.append("")
-    lines.append("#### 📊 Secondary Metrics (F1, Precision, Recall)")
-    lines.append("")
-    lines.append(
-        "| Dataset | F1 (Elim) | F1 (Grid) | Prec (Elim) | Prec (Grid) | Rec (Elim) | Rec (Grid) |"
-    )
-    lines.append("|---|---|---|---|---|---|---|")
-
-    for r in records:
-        e = r["elim"]
-        g = r["grid"]
-
-        def fmt(val):
-            return f"{val:.4f}"
-
-        def winner(ev, gv):
-            if ev >= gv:
-                return f"**{fmt(ev)}**"
-            return fmt(ev)
-
-        lines.append(
-            f"| {r['dataset']} | "
-            f"{winner(e['metrics']['f1_macro'], g['metrics']['f1_macro'])} | "
-            f"{winner(g['metrics']['f1_macro'], e['metrics']['f1_macro'])} | "
-            f"{winner(e['metrics']['precision_macro'], g['metrics']['precision_macro'])} | "
-            f"{winner(g['metrics']['precision_macro'], e['metrics']['precision_macro'])} | "
-            f"{winner(e['metrics']['recall_macro'], g['metrics']['recall_macro'])} | "
-            f"{winner(g['metrics']['recall_macro'], e['metrics']['recall_macro'])} |"
-        )
+        lines.append(f"| {r['dataset']} | {r['grid_type']} | `{ep}` | `{gp}` |")
 
     lines.append("")
     lines.append("</details>")
@@ -384,33 +386,37 @@ def build_model_table(model_name: str, records: List[Dict]) -> str:
 
 
 def build_speed_summary(all_records: List[Dict]) -> str:
-    """Overall speed and score summary across all models."""
+    """Overall speed and score summary grouped by model and grid size."""
     from collections import defaultdict
-    model_times = defaultdict(lambda: {"elim": [], "grid": []})
-    model_score_diffs = defaultdict(list)
+    summary_data = defaultdict(lambda: {"elim_time": [], "grid_time": [], "acc_diffs": []})
 
     for r in all_records:
-        model_times[r["model"]]["elim"].append(r["elim"]["time"])
-        model_times[r["model"]]["grid"].append(r["grid"]["time"])
+        key = (r["model"], r["grid_type"])
+        summary_data[key]["elim_time"].append(r["elim"]["time"])
+        summary_data[key]["grid_time"].append(r["grid"]["time"])
         diff = r["elim"]["metrics"]["accuracy"] - r["grid"]["metrics"]["accuracy"]
-        model_score_diffs[r["model"]].append(diff)
+        summary_data[key]["acc_diffs"].append(diff)
 
-    lines = ["### Speed & Score Summary", ""]
-    lines.append("| Model | Grid Combos | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |")
+    lines = ["### Speed & Score Summary (Light vs Full Grid Scaling)", ""]
+    lines.append("| Model | Grid Size | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |")
     lines.append("|---|---|---|---|---|---|")
 
-    for model_name, cfg in MODELS.items():
-        if model_name not in model_times:
-            continue
-        et = model_times[model_name]["elim"]
-        gt = model_times[model_name]["grid"]
-        diffs = model_score_diffs[model_name]
-        combos = grid_total_fits(cfg["param_grid"]) // CV_FOLDS
+    # Order keys by model and then light -> full
+    sorted_keys = sorted(summary_data.keys(), key=lambda x: (x[0], x[1] == "Full"))
+
+    for model_name, grid_type in sorted_keys:
+        stats = summary_data[(model_name, grid_type)]
+        et = stats["elim_time"]
+        gt = stats["grid_time"]
+        diffs = stats["acc_diffs"]
+
+        grid_config = LIGHT_MODELS if grid_type == "Light" else FULL_MODELS
+        combos = grid_total_fits(grid_config[model_name]["param_grid"]) // CV_FOLDS
         avg_speedup = sum(g / e for e, g in zip(et, gt) if e > 0) / len(et)
         avg_diff = sum(diffs) / len(diffs)
         diff_str = f"+{avg_diff:.4f}" if avg_diff >= 0 else f"{avg_diff:.4f}"
         lines.append(
-            f"| {model_name} | {combos} | "
+            f"| {model_name} | {grid_type} | "
             f"**{sum(et)/len(et):.2f}s** | "
             f"{sum(gt)/len(gt):.2f}s | "
             f"**{avg_speedup:.1f}x** | "
@@ -420,18 +426,20 @@ def build_speed_summary(all_records: List[Dict]) -> str:
     lines.append("")
     return "\n".join(lines)
 
-
-
 # ---------------------------------------------------------------------------
-# Main
+# Main Runner
 # ---------------------------------------------------------------------------
 
 def main():
-    print("=" * 70)
-    print("EliminationSearchCV vs GridSearchCV -- Benchmark")
-    print(f"cv={CV_FOLDS}, elimination_rate={ELIMINATION_RATE}, ")
-    print(f"primary_scoring={PRIMARY_SCORING}, sample_size={SAMPLE_SIZE:,}")
-    print("=" * 70)
+    print("=" * 80)
+    print("EliminationSearchCV vs GridSearchCV -- Light vs Full Grid Scaling")
+    print(f"  Version:         {BENCHMARK_VERSION}")
+    print(f"  CV Folds:        {CV_FOLDS}")
+    print(f"  Elim Rate:       {ELIMINATION_RATE}")
+    print(f"  Max Sample Size: {SAMPLE_SIZE}")
+    print(f"  Datasets:        {list(DATASETS.keys())}")
+    print(f"  Models:          {list(FULL_MODELS.keys())}")
+    print("=" * 80)
 
     all_records = []
 
@@ -452,43 +460,54 @@ def main():
 
         n_used = len(X)
 
-        for model_name, model_cfg in MODELS.items():
-            estimator  = model_cfg["estimator"]
-            param_grid = model_cfg["param_grid"]
-            n_fits     = grid_total_fits(param_grid)
+        for model_name in FULL_MODELS.keys():
+            # Run both grid configurations
+            for grid_type in ["Light", "Full"]:
+                selected_grids = LIGHT_MODELS if grid_type == "Light" else FULL_MODELS
+                model_cfg = selected_grids[model_name]
+                estimator = model_cfg["estimator"]
+                param_grid = model_cfg["param_grid"]
+                n_fits = grid_total_fits(param_grid)
 
-            print(f"  [Model] {model_name}  ({n_fits} GridSearchCV fits)")
+                print(f"  [Model] {model_name} ({grid_type} Grid - {n_fits} GridSearchCV fits)")
 
-            try:
-                ep, em, et = run_elimination(estimator, param_grid, X, y)
-                print(f"    Elim  acc={em['accuracy']:.4f}  f1={em['f1_macro']:.4f}  "
-                      f"time={et:.2f}s  params={ep}")
-            except Exception as e:
-                print(f"    Elim  FAILED: {e}")
-                ep, em, et = {}, {m: 0.0 for m in EVAL_METRICS}, 0.0
+                try:
+                    ep, em, et = run_elimination(estimator, param_grid, X, y)
+                    print(f"    Elim  acc={em['accuracy']:.4f}  time={et:.2f}s  params={ep}")
+                except Exception as e:
+                    print(f"    Elim  FAILED: {e}")
+                    ep, em, et = {}, {m: 0.0 for m in EVAL_METRICS}, 0.0
 
-            try:
-                gp, gm, gt = run_grid_search(estimator, param_grid, X, y)
-                print(f"    Grid  acc={gm['accuracy']:.4f}  f1={gm['f1_macro']:.4f}  "
-                      f"time={gt:.2f}s  params={gp}")
-            except Exception as e:
-                print(f"    Grid  FAILED: {e}")
-                gp, gm, gt = {}, {m: 0.0 for m in EVAL_METRICS}, 0.0
+                try:
+                    gp, gm, gt = run_grid_search(estimator, param_grid, X, y)
+                    print(f"    Grid  acc={gm['accuracy']:.4f}  time={gt:.2f}s  params={gp}")
+                except Exception as e:
+                    print(f"    Grid  FAILED: {e}")
+                    gp, gm, gt = {}, {m: 0.0 for m in EVAL_METRICS}, 0.0
 
-            all_records.append({
-                "dataset": ds_name,
-                "n":       n_used,
-                "model":   model_name,
-                "elim":    {"params": ep, "metrics": em, "time": et},
-                "grid":    {"params": gp, "metrics": gm, "time": gt},
-            })
+                all_records.append({
+                    "dataset": ds_name,
+                    "n":       n_used,
+                    "model":   model_name,
+                    "grid_type": grid_type,
+                    "elim":    {"params": ep, "metrics": em, "time": et},
+                    "grid":    {"params": gp, "metrics": gm, "time": gt},
+                })
 
     # --- Build Markdown report ---
     print("\n\nBuilding Markdown report...")
 
+    version_str = f"v{BENCHMARK_VERSION}" if BENCHMARK_VERSION and not BENCHMARK_VERSION.startswith("v") else BENCHMARK_VERSION
+    version_header = f" ({version_str})" if version_str else ""
+
     md_lines = [
-        "# Benchmark Results — EliminationSearchCV vs GridSearchCV",
+        f"# Scaling Benchmark Results{version_header} — EliminationSearchCV vs GridSearchCV",
         "",
+        "> Compares EliminationSearchCV vs GridSearchCV on both **Light** (small) and **Full** (large) grids.",
+    ]
+    if BENCHMARK_VERSION:
+        md_lines.append(f"> **EliminationSearchCV Package Version:** `{BENCHMARK_VERSION}`  ")
+    md_lines += [
         f"> **Settings:** `cv={CV_FOLDS}` · `elimination_rate={ELIMINATION_RATE}` · "
         f"`primary_scoring={PRIMARY_SCORING}` · `sample_size={SAMPLE_SIZE:,}`  ",
         "> **Bold** = winner for that metric. Reproduce with `python benchmarks/benchmark.py`.",
@@ -497,8 +516,7 @@ def main():
         "",
     ]
 
-    # One table per model
-    for model_name in MODELS:
+    for model_name in FULL_MODELS.keys():
         recs = [r for r in all_records if r["model"] == model_name]
         if not recs:
             continue
@@ -506,7 +524,6 @@ def main():
         md_lines.append("---")
         md_lines.append("")
 
-    # Summary
     md_lines.append(build_speed_summary(all_records))
     md_lines.append("---")
     md_lines.append("")
@@ -518,23 +535,28 @@ def main():
 
     md_content = "\n".join(md_lines)
 
-    # Save to history with settings and timestamp
-    import datetime
+    # Resolution of output filename based on settings parameters
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     rate_str = str(ELIMINATION_RATE).replace(".", "")
     size_str = f"{SAMPLE_SIZE // 1000}k" if (SAMPLE_SIZE >= 1000 and SAMPLE_SIZE % 1000 == 0) else str(SAMPLE_SIZE)
-    history_filename = f"benchmark_results_cv{CV_FOLDS}_rate{rate_str}_size{size_str}_{timestamp}.md"
+    version_clean = BENCHMARK_VERSION.replace(" ", "_").strip()
+    version_suffix = f"v{version_clean}" if not version_clean.startswith("v") else version_clean
+
+    out_filename = f"benchmark_results_scaling_cv{CV_FOLDS}_rate{rate_str}_size{size_str}_{version_suffix}.md"
+    history_filename = f"benchmark_results_scaling_cv{CV_FOLDS}_rate{rate_str}_size{size_str}_{version_suffix}_{timestamp}.md"
     
     history_dir = REPO_ROOT / "benchmarks" / "history"
     history_dir.mkdir(parents=True, exist_ok=True)
     history_path = history_dir / history_filename
 
-    # 1. Write to current static file (so README links stay valid)
-    out_path = REPO_ROOT / "benchmarks" / "benchmark_results.md"
+    # 1. Write report
+    out_dir = REPO_ROOT / "benchmarks" / "marks"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / out_filename
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(md_content)
 
-    # 2. Write to history copy
+    # 2. Write history copy
     with open(history_path, "w", encoding="utf-8") as f:
         f.write(md_content)
 

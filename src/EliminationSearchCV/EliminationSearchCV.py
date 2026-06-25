@@ -35,6 +35,19 @@ class EliminationSearchCV:
         best_params_ (Dict[str, Any]): Best parameter combination found after
             fitting, as a flat dict of scalar values ready for
             ``estimator.set_params(**best_params_)``.
+            Set to ``{}`` before :py:meth:`fit` is called.
+
+        best_score_ (float): Mean cross-validated score of the best parameter
+            combination, computed over the same CV folds used during the search.
+            Mirrors the behaviour of ``GridSearchCV.best_score_``.
+            Set to ``0.0`` before :py:meth:`fit` is called.
+
+        best_estimator_: A clone of ``estimator`` configured with
+            ``best_params_`` and re-fitted on the **full** training dataset
+            (i.e. all of ``X`` and ``y`` passed to :py:meth:`fit`), not on
+            fold subsets.  Ready to call ``.predict()`` directly.
+            Set to ``None`` before :py:meth:`fit` is called or if the best
+            parameters still produce an incompatible estimator.
     """
 
     def __init__(
@@ -57,8 +70,23 @@ class EliminationSearchCV:
         # Cross-validation fold splits, populated during fit().
         self._folds: List = []
 
-        # Populated after fit() completes.
+        # -----------------------------------------------------------------
+        # Public result attributes — all populated after fit() completes.
+        # Before fit() they hold safe sentinel values identical to sklearn's
+        # behaviour (best_params_ = {}, best_score_ = 0.0,
+        # best_estimator_ = None).
+        # -----------------------------------------------------------------
+
+        # Best hyperparameter combination as a flat scalar dict.
         self.best_params_: Dict = {}
+
+        # Mean cross-validated score of the best combination.
+        # Equivalent to GridSearchCV.best_score_.
+        self.best_score_: float = 0.0
+
+        # Estimator refitted on the full training dataset using best_params_.
+        # Equivalent to GridSearchCV.best_estimator_.
+        self.best_estimator_ = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -93,12 +121,46 @@ class EliminationSearchCV:
 
             total_combinations_evaluated += len(candidates)
 
-        # Unwrap each single-element list to a scalar.
+        # ------------------------------------------------------------------
+        # best_params_ — unwrap each single-element list to a scalar.
+        #
         # Before: {'C': [1], 'penalty': ['l1'], 'solver': ['liblinear'], 'max_iter': [1000]}
         # After:  {'C':  1,  'penalty':  'l1',  'solver':  'liblinear',  'max_iter':  1000}
+        # ------------------------------------------------------------------
         self.best_params_ = {
             key: values[0] for key, values in self._active_param_grid.items()
         }
+
+        # ------------------------------------------------------------------
+        # best_score_ — mean CV score of the winning parameter combination.
+        #
+        # We re-use the folds that were already built for the search, so no
+        # extra data splitting is needed.  _score_candidates() returns a
+        # list with one element because we pass a single-element list.
+        # ------------------------------------------------------------------
+        best_scores = self._score_candidates([self.best_params_])
+        self.best_score_ = best_scores[0]
+
+        # ------------------------------------------------------------------
+        # best_estimator_ — clone refitted on the FULL training dataset.
+        #
+        # sklearn's GridSearchCV refits the winner on all of X/y (not on
+        # fold subsets) so the estimator can be used for prediction directly.
+        # Edge case: if best_params_ is still incompatible (e.g. all combos
+        # scored 0.0 and elimination preserved an invalid set), the refit
+        # raises; we catch it and leave best_estimator_ as None rather than
+        # crashing the caller.
+        # ------------------------------------------------------------------
+        try:
+            best_estimator = clone(self.estimator)
+            best_estimator.set_params(**self.best_params_)
+            best_estimator.fit(X, y)
+            self.best_estimator_ = best_estimator
+        except Exception:
+            # best_estimator_ remains None; best_params_ and best_score_ are
+            # still valid for inspection.
+            self.best_estimator_ = None
+
         return self
 
     # ------------------------------------------------------------------

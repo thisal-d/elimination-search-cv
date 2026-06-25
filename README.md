@@ -95,21 +95,19 @@ EliminationSearchCV.fit(X, y)
 
 ## 📦 Installation
 
-### From PyPI *(not yet published)*
-
 ```bash
 pip install elimination-search-cv
 ```
 
-### From Source (Developer Setup)
+**Requirements:** Python ≥ 3.8 · `scikit-learn` and `numpy` are installed automatically.
+
+### Developer Setup (contributing / running from source)
 
 ```bash
 git clone https://github.com/thisal-d/elimination-search-cv.git
 cd elimination-search-cv
 pip install -e .
 ```
-
-**Requirements:** Python ≥ 3.8, scikit-learn, numpy
 
 ---
 
@@ -152,8 +150,12 @@ search.fit(X_train, y_train)
 print(search.best_params_)
 # → {'C': 1, 'penalty': 'l1', 'solver': 'liblinear', 'max_iter': 1000}
 
-best_model = LogisticRegression(**search.best_params_, random_state=42)
-best_model.fit(X_train, y_train)
+print(search.best_score_)
+# → 0.9248   (mean CV accuracy of the best combination)
+
+# best_estimator_ is already fitted on the full training set — ready to predict
+print(search.best_estimator_.predict(X_test[:5]))
+# → [1 0 1 1 0]
 ```
 
 ### Constructor Parameters
@@ -170,11 +172,11 @@ best_model.fit(X_train, y_train)
 
 ### Result Attributes
 
-> **Current support only.** Only `best_params_` is exposed after fitting right now. Attributes like `best_score_` and `cv_results_` are not yet available.
-
 | Attribute | Type | Description |
 |---|---|---|
 | `best_params_` | `Dict[str, Any]` | Best parameter combination found, as scalar values. Ready to pass to `estimator.set_params(**best_params_)`. |
+| `best_score_` | `float` | Mean cross-validated score of the best parameter combination (same CV folds used during the search). Mirrors `GridSearchCV.best_score_`. |
+| `best_estimator_` | sklearn estimator | A clone of `estimator` configured with `best_params_` and **re-fitted on the full training dataset** — ready to call `.predict()` directly. `None` if the refit fails. |
 
 ### Supported Scoring Metrics
 
@@ -204,30 +206,37 @@ best_model.fit(X_train, y_train)
 
 ### 📊 Benchmarks
 
-> **Experimental.** Results vary by dataset and hyperparameter grid. Run `python benchmarks/benchmark.py` to reproduce.
-> Full detailed per-dataset tables → **[benchmark_results.md](./benchmarks/benchmark_results.md)**
+> **Experimental.** Results vary by dataset and hyperparameter grid.
+> - Run the quick, configurable benchmark: `python benchmarks/benchmark_fast.py`
+> - Run the comprehensive full benchmark: `python benchmarks/benchmark.py`
+> - Full per-model, per-dataset tables (Light grid vs Full grid) → **[v0.0.1 benchmark results](./benchmarks/marks/benchmark_results_scaling_cv2_rate08_size10k_v0.0.1.md)**
 
-**Settings:** `cv=5` · `elimination_rate=0.8` · `primary_scoring=accuracy` · `sample_size=20,000`  
+**Settings:** `cv=2` · `elimination_rate=0.8` · `primary_scoring=accuracy` · `sample_size=10,000`  
 **Models tested:** LogisticRegression · RandomForest · DecisionTree · KNeighbors · GradientBoosting  
-**Metrics tracked:** Accuracy · F1 (macro) · Precision (macro) · Recall (macro) · Time (s) · Speedup  
+**Reproduced with:** `python benchmarks/benchmark.py`  
 
-#### 🚀 Speed & Score Summary (5-Model Run)
+#### 🚀 Speed & Score Summary — Light Grid vs Full Grid (v0.0.1)
 
-The table below shows average search times and accuracy differences compared to a full grid search across all 5 benchmark datasets.
+The table below shows average search times and accuracy differences vs a full `GridSearchCV` across 3 benchmark datasets.
 
-| Model | Grid Combos | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |
+| Model | Grid Size | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |
 |---|---|---|---|---|---|
-| **LogisticRegression** | 40 | **0.93s** | 3.04s | **5.1x** | -0.0104 |
-| **RandomForest** | 27 | **13.95s** | 15.82s | **1.1x** | -0.0060 |
-| **DecisionTree** | 24 | **0.46s** | 0.38s | **0.9x** | -0.0015 |
-| **KNeighbors** | 16 | **3.49s** | 2.02s | **0.5x** | -0.0029 |
-| **GradientBoosting** | 18 | **22.82s** | 17.30s | **0.8x** | -0.0072 |
+| DecisionTree | Light | **0.06s** | 0.03s | **0.6x** | -0.0001 |
+| **DecisionTree** | **Full** | **0.65s** | 81.48s | **152.5x** | -0.0008 |
+| GradientBoosting | Light | **2.64s** | 0.39s | **0.1x** | +0.0000 |
+| **GradientBoosting** | **Full** | **39.46s** | 1408.66s | **35.5x** | -0.0194 |
+| KNeighbors | Light | **0.56s** | 0.13s | **0.3x** | +0.0000 |
+| **KNeighbors** | **Full** | **8.77s** | 102.31s | **11.4x** | -0.0004 |
+| LogisticRegression | Light | **0.11s** | 1.44s | **5.8x** | -0.0004 |
+| **LogisticRegression** | **Full** | **1.10s** | 4.54s | **4.0x** | -0.0004 |
+| RandomForest | Light | **1.15s** | 0.35s | **0.3x** | +0.0000 |
+| **RandomForest** | **Full** | **33.58s** | 950.79s | **36.2x** | -0.0002 |
 
 > **Key Findings:**
-> 1. **High-dimensional grids (LogisticRegression)** show a **4.4x speedup** with minimal accuracy trade-off (~1%).
-> 2. **Fast models (KNeighbors, DecisionTree)** have very low individual fit overhead, meaning the logic overhead of elimination doesn't pay off for small search spaces.
-> 3. **Heavy models (RandomForest, GradientBoosting)** show comparable runtimes at this grid size, but we expect higher speedups on larger grids.
-> 4. **Small datasets:** On very small datasets (e.g. Heart Failure, n=299), cross-validation score noise makes the 80% elimination rate too aggressive. We recommend using a lower `elimination_rate` (e.g., `0.5`) for datasets under 500 rows.
+> 1. **Full grids are where elimination shines.** `DecisionTree` achieves a **152x speedup** on full grids with near-identical accuracy (-0.0008). `RandomForest` reaches **36x** and `GradientBoosting` **35x**.
+> 2. **Light grids (small search spaces)** show slower-than-GridSearchCV times — the overhead of elimination rounds doesn't pay off when there are few combinations to begin with. This is expected behaviour.
+> 3. **Score trade-off is minimal.** Across all models and datasets, the average accuracy difference on full grids is < 0.02, often zero.
+> 4. **Small datasets / Light grids:** Use a lower `elimination_rate` (e.g., `0.5`) when the grid is small or the dataset is under 500 rows to avoid over-aggressive pruning.
 
 ---
 
@@ -267,8 +276,12 @@ Evaluates a fitted model against a single metric. Raises `ValueError` for unsupp
 
 ## 🚧 Project Status & Roadmap
 
+> ⚠️ **Early-stage project.** `EliminationSearchCV` is functional but still at an early stage — the algorithm, API, and supported features will evolve significantly.
+> More scorers, parallel execution (`n_jobs`), and richer result attributes are on the roadmap.
+> **Read the [CHANGELOG](./CHANGELOG.md)** to follow what changes between versions, and **watch / ⭐ the repo** to be notified of new releases.
+
 ### ✅ Implemented
-- Core `EliminationSearchCV` class with `fit()`, `best_params_`
+- Core `EliminationSearchCV` class with `fit()`, `best_params_`, `best_score_`, `best_estimator_`
 - Round 1: per-parameter isolation and elimination
 - Rounds 2+: global combination ranking and elimination
 - Cross-validated fold creation (`StratifiedKFold` / `KFold`)
@@ -276,12 +289,12 @@ Evaluates a fitted model against a single metric. Raises `ValueError` for unsupp
 - Scoring utilities for 5 metrics
 
 ### 🔨 In Progress / Planned
-- `best_score_` and `cv_results_` attributes
+- `cv_results_` attribute (per-fold score breakdown)
 - `n_jobs` parallel evaluation via `joblib`
 - `verbose` logging parameter
+- `refit` flag (opt-out of best-estimator refit)
 - Scikit-Learn `BaseEstimator` compatibility (`get_params` / `set_params`)
 - Full `pytest` test suite
-- Systematic benchmarks vs `GridSearchCV` and `RandomizedSearchCV`
 - PyPI publication (`v0.1.0`)
 - Sphinx / MkDocs API documentation
 
@@ -289,10 +302,18 @@ Evaluates a fitted model against a single metric. Raises `ValueError` for unsupp
 
 ## 🤝 Contributing
 
-1. **Browse open issues** at [github.com/thisal-d/elimination-search-cv/issues](https://github.com/thisal-d/elimination-search-cv/issues)
-2. **Open an issue** before starting significant work — aligns design, avoids duplicates
-3. **Fork → feature branch → PR** against `main` (e.g. `feat/n-jobs-parallel`)
-4. PRs should include tests and clean docstrings
+Contributions of any size are welcome — from fixing a typo in the docs to implementing `n_jobs` parallel fitting.
+
+1. **Read [CONTRIBUTING.md](./CONTRIBUTING.md)** for setup instructions, branch naming, and PR checklist.
+2. **Browse open issues** at [github.com/thisal-d/elimination-search-cv/issues](https://github.com/thisal-d/elimination-search-cv/issues)
+3. **Open an issue** before starting significant work — aligns design and avoids duplicate effort.
+4. **Fork → feature branch → PR** against `main` (e.g. `feat/n-jobs-parallel`).
+5. PRs should include tests and clean docstrings.
+
+Not ready to code? You can still help by:
+- ⭐ Starring the repo to boost visibility
+- Reporting bugs or missing features via [GitHub Issues](https://github.com/thisal-d/elimination-search-cv/issues)
+- Sharing benchmarks or datasets where elimination behaves unexpectedly
 
 ---
 

@@ -4,16 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "elimination-search-cv"
-version = "0.0.0"
+version = "0.0.1"
 authors = [
   { name = "Thisal-D" }
 ]
 
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 
-description = "A Scikit-Learn compatible hyperparameter search that prunes poorly-performing values early to reduce the number of configurations evaluated."
+description = "A Scikit-Learn compatible hyperparameter search that eliminates low-scoring parameter values progressively — faster than GridSearchCV on large grids."
 readme = "README.md"
 requires-python = ">=3.8"
+
+# Runtime dependencies — installed automatically when the user runs `pip install elimination-search-cv`
+dependencies = [
+  "scikit-learn>=1.0",
+  "numpy>=1.21",
+]
 
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -28,12 +35,30 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
-  "License :: OSI Approved :: MIT License"
 ]
 
-keywords = []
+keywords = [
+  "hyperparameter",
+  "hyperparameter-search",
+  "hyperparameter-tuning",
+  "hyperparameter-optimization",
+  "grid-search",
+  "scikit-learn",
+  "sklearn",
+  "machine-learning",
+  "cross-validation",
+  "elimination",
+  "model-selection",
+  "model-tuning",
+  "model-optimization"
+]
 
 [project.urls]
-homepage = "https://github.com/thisal-d/elimination-search-cv"
-repository = "https://github.com/thisal-d/elimination-search-cv"
-issues = "https://github.com/thisal-d/elimination-search-cv/issues"
+Homepage     = "https://github.com/thisal-d/elimination-search-cv"
+Repository   = "https://github.com/thisal-d/elimination-search-cv"
+Issues       = "https://github.com/thisal-d/elimination-search-cv/issues"
+Changelog    = "https://github.com/thisal-d/elimination-search-cv/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/thisal-d/elimination-search-cv/tree/main/docs"
+
+[tool.setuptools.packages.find]
+where = ["src"]

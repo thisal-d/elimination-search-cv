@@ -172,6 +172,23 @@ def create_cv_data_sets(
                     (X_train_fold2, y_train_fold2, X_val_fold2, y_val_fold2),  # 80 train / 20 val
                 ]
     """
+    if cv == 1:
+        # Support cv=1 by doing a single train-validation split (80/20)
+        if stratified:
+            try:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y, test_size=0.2, random_state=42, stratify=y
+                )
+            except Exception:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y, test_size=0.2, random_state=42
+                )
+        else:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+        return [(X_train, y_train, X_val, y_val)]
+
     splitter = (
         StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
         if stratified
