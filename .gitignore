@@ -18,3 +18,4 @@ __pycache__/
 benchmark_fast.py
 benchmark_full.py
 benchmark_simple.py
+dist
