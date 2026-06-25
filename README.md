@@ -1,219 +1,339 @@
 # EliminationSearchCV 🚀
 
-An experimental hyperparameter search library for Scikit-Learn. The core idea is to **prune poorly-performing parameter values early**, before they pollute the rest of the search, rather than blindly evaluating every combination in the full grid. Whether this approach holds up across diverse models and datasets is something this project aims to find out.
+> A Scikit-Learn compatible hyperparameter search that **eliminates low-scoring parameter values progressively** — round by round — rather than blindly evaluating the entire Cartesian product up front.
+
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange)](./CHANGELOG.md)
+[![GitHub Issues](https://img.shields.io/github/issues/thisal-d/elimination-search-cv)](https://github.com/thisal-d/elimination-search-cv/issues)
+
+If this project interests you, a ⭐ on the repo keeps the motivation alive — it genuinely helps!
 
 ---
 
-## 💡 The Core Problem & Our Solution
+## 💡 The Problem with `GridSearchCV`
 
-### The Problem with Standard `GridSearchCV`
+Scikit-Learn's `GridSearchCV` is brute-force by design. For a grid with `k` parameters and `n` values each, it evaluates **nᵏ × cv_folds** configurations — every single one, regardless of how poorly a value performs in early trials.
 
-Scikit-Learn's `GridSearchCV` is a cornerstone tool, but its underlying strategy is fundamentally **brute-force**. Given a parameter grid with `k` hyperparameters, each with `n` candidate values, it evaluates every combination in the full Cartesian product — that's `n^k` configurations, multiplied by your number of CV folds.
-
-This creates a **combinatorial explosion** that scales poorly and wastes enormous amounts of compute time:
-
-- **Dead-end values are never discarded.** A `learning_rate=0.5` that tanks performance on the very first trial will still be re-evaluated in thousands of later combinations.
-- **All configurations are treated as equally promising.** There is no mechanism to learn from early results and steer the search toward more fertile regions.
-- **Cost scales exponentially with grid size.** Adding one new hyperparameter with 4 candidate values can quadruple your total training time.
-
-For large models, big datasets, or expensive cross-validation, this is not just slow — it is **prohibitively costly**.
+| Problem | Impact |
+|---|---|
+| Dead-end values are never discarded | A bad `learning_rate=0.5` is re-evaluated in every downstream combination |
+| No learning from early results | The search treats round 1 and round 1000 as equally uninformed |
+| Exponential cost scaling | Adding one new 4-value parameter can **quadruple** total training time |
 
 ---
 
-### The Elimination Search Solution
+## ✅ The Elimination Approach
 
-`EliminationSearchCV` breaks the search into a series of intelligent, sequential evaluation rounds. Rather than committing to the full Cartesian product upfront, it **observes, learns, and prunes** the search space as it goes.
+`EliminationSearchCV` evaluates parameters in **rounds of increasing complexity**, using cross-validated scores from each round to eliminate underperformers before they compound.
 
-**Here is a concrete example.** Suppose you are tuning a gradient-boosted model with the following grid:
+**Concrete example** — tuning `LogisticRegression` with:
+
+```python
+param_grid = {
+    'C':        [0.001, 0.01, 0.1, 1, 10, 100],   # 6 values
+    'penalty':  ['l1', 'l2'],                       # 2 values
+    'solver':   ['liblinear', 'saga'],              # 2 values
+    'max_iter': [1000, 2000],                       # 2 values
+}
+# Full GridSearchCV: 6 × 2 × 2 × 2 = 48 combinations × 5 folds = 240 fits
+```
+
+`EliminationSearchCV` with `elimination_rate=0.8` (keep best 20%):
+
+| Round | Combinations tested | Grid after elimination |
+|-------|--------------------|-----------------------|
+| 1 — single-param | 12 | `C:[1], penalty:['l1'], solver:['liblinear'], max_iter:[1000]` |
+| 2 — two-param pairs | 6 | unchanged (all at 1 value) |
+| 3 — three-param triples | 4 | unchanged |
+| 4 — full combinations | 1 | final result |
+| **Total** | **23 fits** | vs **240 fits** for GridSearchCV (×5 folds) |
+
+> ⚠️ **Note:** This is an experimental approach. The quality of the best result found — and how often it matches a full grid search — is actively being benchmarked. Results depend heavily on the dataset and model.
+
+---
+
+## 🏗️ Architecture & Component Breakdown
 
 ```
-learning_rate : [0.001, 0.01, 0.1, 0.5]
-max_depth     : [3, 5, 10]
-n_estimators  : [50, 100, 200]
+src/EliminationSearchCV/
+├── EliminationSearchCV.py   ← Core class: fit(), elimination logic, scoring
+└── Utils.py                 ← Stateless utilities: fold creation, combination generation, metrics
 ```
 
-A full `GridSearchCV` would evaluate all **4 × 3 × 3 = 36 configurations** (× CV folds).
+### Module Interaction
 
-`EliminationSearchCV` proceeds differently:
+```
+EliminationSearchCV.fit(X, y)
+         │
+         ├─▶ Utils.create_cv_data_sets()          — builds StratifiedKFold/KFold splits
+         │
+         └─▶ [For each round i = 1 … n_params]
+                  │
+                  ├─▶ Utils.generate_param_combinations_with_limit(grid, limit=i)
+                  │         — generates all i-parameter combinations from active grid
+                  │
+                  ├─▶ EliminationSearchCV._score_candidates(candidates)
+                  │         └─▶ Utils.get_model_score()  — per-fold metric evaluation
+                  │
+                  └─▶ EliminationSearchCV._eliminate_low_scoring_values(candidates, scores)
+                            ├─▶ _eliminate_single_param_values()   — Round 1: per-param
+                            └─▶ _eliminate_multi_param_values()    — Rounds 2+: global rank
+```
 
-1. **Round 1 — Anchor Baseline Selection:** A small set of anchor configurations is selected to establish a performance baseline across all hyperparameter dimensions.
+### Key Design Decisions
 
-2. **Round 2 — Dimension Isolation & Valuation:** Each hyperparameter is evaluated in isolation. For example, the algorithm tests all four `learning_rate` values while holding `max_depth` and `n_estimators` fixed at their anchor (baseline) values. It discovers that `learning_rate=0.5` is a consistent underperformer — its cross-validated score is substantially below the others in every anchor context.
-
-3. **Round 3 — Dynamic Search Space Pruning:** `learning_rate=0.5` is **eliminated from the search space entirely**. No future configuration will ever include it. The active grid now contains only 3 viable `learning_rate` values.
-
-4. **Round 4 — Focused Sub-grid Execution:** The remaining search is executed on the pruned grid: **3 × 3 × 3 = 27 configurations** — or potentially far fewer if additional values are eliminated during subsequent rounds.
-
-> **The idea:** By eliminating just one `learning_rate` value, we cut 9 configurations (25%) from the search after only a handful of targeted evaluations. In theory, savings compound across dimensions — but how much time is actually saved versus a full grid search, and whether the best result is still found reliably, are open questions that benchmarking will answer.
-
----
-
-## 🛠️ Architecture & How It Works
-
-`EliminationSearchCV` orchestrates its search through four well-defined execution phases:
-
-- **Phase 1 — Anchor Baseline Selection**
-  Before any elimination can occur, the algorithm needs a reference point. A compact set of "anchor" configurations is selected from the parameter grid. These anchors serve as a stable, neutral context for evaluating individual hyperparameter values in isolation. The anchor selection strategy is designed to ensure broad coverage of the search space, not just a single default configuration.
-
-- **Phase 2 — Dimension Isolation & Valuation**
-  Each hyperparameter **dimension** (e.g., `learning_rate`, `max_depth`) is evaluated independently against the anchor baselines. For each candidate value within a dimension, the algorithm computes a cross-validated performance score while holding all other hyperparameters fixed at their anchor values. This produces a ranked valuation of every candidate value in the grid, dimension by dimension.
-
-- **Phase 3 — Dynamic Search Space Pruning**
-  Candidate values whose performance falls below a configurable elimination threshold are **dropped from the active search space**. This pruning is applied after each dimension is scored, meaning that the search space contracts progressively and dynamically. Eliminated values are never revisited. Each eliminated value reduces the size of the final Cartesian product — and this reduction compounds multiplicatively across all dimensions.
-
-- **Phase 4 — Focused Sub-grid Execution**
-  With the search space now pruned to contain only the most promising candidate values, a final, targeted grid search is executed over the remaining sub-grid. Because this sub-grid is significantly smaller than the original, this final phase is fast. The result — `best_params_`, `best_score_`, and `cv_results_` — is surfaced through a fully Scikit-Learn-compatible interface.
+| Decision | Rationale |
+|---|---|
+| **Per-parameter elimination in Round 1** | Each param is scored in isolation so its values are compared fairly, without interference from other params |
+| **Global ranking in later rounds** | Multi-param combos are ranked by total cross-validated score; the top `(1-elimination_rate)` fraction survives |
+| **Params not in any kept combo are preserved** | Prevents a parameter from being wiped out just because it wasn't part of the top-ranked 2-param pairs |
+| **Invalid combos score `0.0`** | Incompatible combinations (e.g. `penalty='l1'` + `solver='lbfgs'`) are caught and naturally eliminated |
+| **Always keep ≥ 1 value per param** | Prevents the grid from collapsing to an empty state |
 
 ---
 
-## 💻 API Reference & Usage Example
-
-> **Note:** The API is still being designed. The three core parameters — `estimator`, `param_grid`, and `scoring` — are confirmed. Everything else (additional parameters, exact attribute names, return types) is not finalized yet and may change as implementation progresses.
-
-### Installation
+## 📦 Installation
 
 ```bash
 pip install elimination-search-cv
 ```
 
+**Requirements:** Python ≥ 3.8 · `scikit-learn` and `numpy` are installed automatically.
+
+### Developer Setup (contributing / running from source)
+
+```bash
+git clone https://github.com/thisal-d/elimination-search-cv.git
+cd elimination-search-cv
+pip install -e .
+```
+
+---
+
+## 🔌 Core API & Usage Examples
+
 ### Basic Usage
 
 ```python
-from sklearn.datasets import make_classification
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from sklearn.datasets import make_classification
 
-from elimination_search_cv import EliminationSearchCV
+from EliminationSearchCV import EliminationSearchCV
 
-# --- 1. Prepare Data ---
-X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# 1. Prepare data
+X, y = make_classification(n_samples=5000, n_features=20, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-# --- 2. Define Your Model & Parameter Grid ---
-#         (Exactly the same as you would for GridSearchCV)
-model = RandomForestClassifier(random_state=42)
+# 2. Define model and grid (same format as GridSearchCV)
+model = LogisticRegression(random_state=42)
 
 param_grid = {
-    'n_estimators':     [50, 100, 200, 500],
-    'max_depth':        [None, 5, 10, 20],
-    'min_samples_split': [2, 5, 10, 20],
-    'max_features':     ['sqrt', 'log2', 0.5],
+    'C':        [0.001, 0.01, 0.1, 1, 10, 100],
+    'penalty':  ['l1', 'l2'],
+    'solver':   ['liblinear', 'saga'],
+    'max_iter': [1000, 2000],
 }
 
-# --- 3. Initialize EliminationSearchCV ---
-#         Only the three confirmed parameters are shown here.
-#         Other parameters (e.g. cv, verbose, n_jobs) are not decided yet.
+# 3. Initialize and fit
 search = EliminationSearchCV(
     estimator=model,
     param_grid=param_grid,
     scoring='accuracy',
+    cv=5,
+    elimination_rate=0.8,   # eliminate worst 80% each round, keep best 20%
 )
-
-# --- 4. Fit ---
 search.fit(X_train, y_train)
 
-# --- 5. Access Results ---
-#         Exact attribute names are still being figured out.
-#         The goal is to expose at least best_params_ and best_score_.
+# 4. Use results — same interface as GridSearchCV
 print(search.best_params_)
+# → {'C': 1, 'penalty': 'l1', 'solver': 'liblinear', 'max_iter': 1000}
+
 print(search.best_score_)
+# → 0.9248   (mean CV accuracy of the best combination)
+
+# best_estimator_ is already fitted on the full training set — ready to predict
+print(search.best_estimator_.predict(X_test[:5]))
+# → [1 0 1 1 0]
 ```
 
-### Confirmed Parameters
+### Constructor Parameters
 
-These three parameters are the foundation of the API. Their behaviour is settled:
+> **Current support only.** These are the parameters available right now. More options (e.g. `n_jobs`, `verbose`, `refit`) may or may not be added in the future — no promises yet.
 
-| Parameter | Description |
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `estimator` | sklearn estimator | *required* | Any estimator implementing `fit` and `predict`. |
+| `param_grid` | `Dict[str, List]` | *required* | Parameter names mapped to candidate value lists. |
+| `scoring` | `str` | *required* | Evaluation metric. See supported values below. |
+| `cv` | `int` | `5` | Number of cross-validation folds. |
+| `elimination_rate` | `float` | `0.8` | Fraction of values to eliminate per round. Must be in `[0.0, 1.0)`. |
+
+### Result Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `best_params_` | `Dict[str, Any]` | Best parameter combination found, as scalar values. Ready to pass to `estimator.set_params(**best_params_)`. |
+| `best_score_` | `float` | Mean cross-validated score of the best parameter combination (same CV folds used during the search). Mirrors `GridSearchCV.best_score_`. |
+| `best_estimator_` | sklearn estimator | A clone of `estimator` configured with `best_params_` and **re-fitted on the full training dataset** — ready to call `.predict()` directly. `None` if the refit fails. |
+
+### Supported Scoring Metrics
+
+> **Current support only.** These five metrics are what the library supports today. Additional metrics may be added later.
+
+| Value | Sklearn function |
 |---|---|
-| `estimator` | Any Scikit-Learn compatible estimator — something with a `fit` method. |
-| `param_grid` | A dictionary mapping parameter names to lists of values to search over. |
-| `scoring` | The metric used to evaluate and compare configurations (e.g. `'accuracy'`, `'f1'`). |
-
-### Everything Else — Not Decided Yet
-
-Parameters like `cv`, `verbose`, and `n_jobs` are not confirmed. They are common in `GridSearchCV` and will likely appear in some form, but the exact names, defaults, and behaviour are still being worked out during implementation.
-
-The same applies to post-fit attributes. The intention is to expose at least `best_params_` and `best_score_`, but the full attribute surface is TBD.
+| `'accuracy'` | `sklearn.metrics.accuracy_score` |
+| `'precision'` | `sklearn.metrics.precision_score` |
+| `'recall'` | `sklearn.metrics.recall_score` |
+| `'f1'` | `sklearn.metrics.f1_score` |
+| `'roc_auc'` | `sklearn.metrics.roc_auc_score` |
 
 ---
 
-## 🚧 Project Status: Early Stage, Building in Public
+## ⚡ GridSearchCV Comparison
 
-`EliminationSearchCV` is at an early stage — the algorithm is designed, but the implementation has not started yet. This project is being built openly so that progress, decisions, and dead-ends are all visible.
+### Strategy Differences
 
-This might work out well, or it might turn out the elimination heuristic is too aggressive in some cases and misses good configurations. That is what testing and real benchmarks are for. If you are interested in the idea and want to follow along, contribute, or challenge the approach — feel free to open an issue or jump into the roadmap below.
+| | `GridSearchCV` | `EliminationSearchCV` |
+|---|---|---|
+| **Strategy** | Full Cartesian product | Progressive elimination |
+| **Combinations evaluated** | `∏ len(values_i)` for all params | Shrinks each round as values are dropped |
+| **Early stopping** | ✗ None | ✓ Low-scoring values dropped after Round 1 |
+| **Invalid combo handling** | Raises exception | Scored `0.0`, eliminated naturally |
+| **Params with 1 remaining value** | Not applicable | Skipped from further expansion (zero overhead) |
 
-### 📋 Roadmap & Todo
+### 📊 Benchmarks
 
-#### ✅ Foundation
+> **Experimental.** Results vary by dataset and hyperparameter grid.
+> - Run the quick, configurable benchmark: `python benchmarks/benchmark_fast.py`
+> - Run the comprehensive full benchmark: `python benchmarks/benchmark.py`
+> - Full per-model, per-dataset tables (Light grid vs Full grid) → **[v0.0.1 benchmark results](./benchmarks/marks/benchmark_results_scaling_cv2_rate08_size10k_v0.0.1.md)**
 
-- [x] Initial project scaffolding (`pyproject.toml`, `src` layout, `LICENSE`)
-- [x] Core `README.md` drafted with algorithm description and API reference
-- [x] Repository made public and open for contributions
+**Settings:** `cv=2` · `elimination_rate=0.8` · `primary_scoring=accuracy` · `sample_size=10,000`  
+**Models tested:** LogisticRegression · RandomForest · DecisionTree · KNeighbors · GradientBoosting  
+**Reproduced with:** `python benchmarks/benchmark.py`  
 
-#### 🔨 Core Implementation
+#### 🚀 Speed & Score Summary — Light Grid vs Full Grid (v0.0.1)
 
-- [ ] Implement abstract `BaseEliminationSearch` class with Scikit-Learn `BaseEstimator` compatibility
-- [ ] Implement `EliminationSearchCV` class extending the base class
-- [ ] Implement **Phase 1**: Anchor baseline configuration selection logic
-- [ ] Implement **Phase 2**: Per-dimension hyperparameter isolation and cross-validated scoring
-- [ ] Implement **Phase 3**: Elimination threshold logic and dynamic search space pruning
-- [ ] Implement **Phase 4**: Final focused sub-grid search over pruned parameter space
-- [ ] Expose `eliminated_params_` attribute for post-fit inspection of pruned values
-- [ ] Ensure full compatibility with the `cv_results_` dictionary schema from `GridSearchCV`
+The table below shows average search times and accuracy differences vs a full `GridSearchCV` across 3 benchmark datasets.
 
-#### 🧪 Testing & Validation
+| Model | Grid Size | Avg Elim Time | Avg Grid Time | Avg Speedup | Avg Acc Diff |
+|---|---|---|---|---|---|
+| DecisionTree | Light | **0.06s** | 0.03s | **0.6x** | -0.0001 |
+| **DecisionTree** | **Full** | **0.65s** | 81.48s | **152.5x** | -0.0008 |
+| GradientBoosting | Light | **2.64s** | 0.39s | **0.1x** | +0.0000 |
+| **GradientBoosting** | **Full** | **39.46s** | 1408.66s | **35.5x** | -0.0194 |
+| KNeighbors | Light | **0.56s** | 0.13s | **0.3x** | +0.0000 |
+| **KNeighbors** | **Full** | **8.77s** | 102.31s | **11.4x** | -0.0004 |
+| LogisticRegression | Light | **0.11s** | 1.44s | **5.8x** | -0.0004 |
+| **LogisticRegression** | **Full** | **1.10s** | 4.54s | **4.0x** | -0.0004 |
+| RandomForest | Light | **1.15s** | 0.35s | **0.3x** | +0.0000 |
+| **RandomForest** | **Full** | **33.58s** | 950.79s | **36.2x** | -0.0002 |
 
-- [ ] Set up `pytest` test suite in the `tests/` directory
-- [ ] Unit tests for anchor selection, elimination logic, and sub-grid construction
-- [ ] Integration tests: verify `EliminationSearchCV` is a valid drop-in for `GridSearchCV` on standard datasets
-- [ ] Correctness tests: confirm that pruned values are consistently underperformers, not false positives
-- [ ] Edge case tests: single-value dimensions, all values eliminated, single CV fold, etc.
-
-#### ⚡ Performance & Parallelism
-
-- [ ] Implement `n_jobs` parameter with `joblib` for parallel cross-validation evaluation
-- [ ] Benchmark `EliminationSearchCV` vs. `GridSearchCV` on a suite of standard datasets and model types
-- [ ] Profile and optimize the elimination scoring loop for large parameter grids
-- [ ] Explore caching strategies to avoid redundant model fits across dimensions
-
-#### 📦 Distribution & Documentation
-
-- [ ] Publish first release (`v0.1.0`) to PyPI
-- [ ] Write full API documentation with `sphinx` or `mkdocs-material`
-- [ ] Add Jupyter Notebook demo showing real-world speedup comparisons
-- [ ] Add GitHub Actions CI pipeline for automated testing on push/PR
+> **Key Findings:**
+> 1. **Full grids are where elimination shines.** `DecisionTree` achieves a **152x speedup** on full grids with near-identical accuracy (-0.0008). `RandomForest` reaches **36x** and `GradientBoosting` **35x**.
+> 2. **Light grids (small search spaces)** show slower-than-GridSearchCV times — the overhead of elimination rounds doesn't pay off when there are few combinations to begin with. This is expected behaviour.
+> 3. **Score trade-off is minimal.** Across all models and datasets, the average accuracy difference on full grids is < 0.02, often zero.
+> 4. **Small datasets / Light grids:** Use a lower `elimination_rate` (e.g., `0.5`) when the grid is small or the dataset is under 500 rows to avoid over-aggressive pruning.
 
 ---
 
-## 🤝 Contributing & License
 
-### How to Contribute
+## 🔬 Internal Utilities (`Utils.py`)
 
-`EliminationSearchCV` is an open-source project and **contributions of all kinds are enthusiastically welcomed**. You do not need to be a hyperparameter tuning expert to make a meaningful impact — there are tasks at every level of complexity on the roadmap above.
+These functions are used internally by `EliminationSearchCV` but are importable independently.
 
-Here is how to get involved:
+### `generate_param_combinations_with_limit(param_grid, limit)`
 
-1. **Browse the Roadmap.** Find a task in the checklist above that interests you. Unchecked items in the *Core Implementation* and *Testing & Validation* sections are the most immediate priorities.
+Generates all combinations of exactly `limit` parameters at a time.
 
-2. **Open an Issue.** Before starting work on a significant change, open a GitHub Issue to describe what you want to do. This lets us align on the design, avoid duplicate work, and give you early feedback. For small fixes, feel free to go straight to a Pull Request.
+```python
+from EliminationSearchCV.Utils import generate_param_combinations_with_limit
 
-3. **Fork & Submit a PR.** Fork the repository, create a feature branch (e.g., `feat/phase-2-dimension-scoring`), implement your changes with clean code and docstrings, and open a Pull Request against `main`. PRs should include relevant tests wherever applicable.
+grid = {'C': [0.1, 1], 'penalty': ['l1', 'l2']}
 
-4. **Report Bugs & Request Features.** Found unexpected behaviour? Have an idea for a new feature? Open a GitHub Issue with a clear description, a minimal reproducible example if relevant, and any context that would help us investigate.
+# limit=1: each param in isolation
+generate_param_combinations_with_limit(grid, limit=1)
+# → [{'C': 0.1}, {'C': 1}, {'penalty': 'l1'}, {'penalty': 'l2'}]
 
-5. **Improve Documentation.** Clear, accurate documentation is just as valuable as code. If you find anything confusing, incomplete, or out of date — fix it and send a PR.
+# limit=2: all pairs
+generate_param_combinations_with_limit(grid, limit=2)
+# → [{'C': 0.1, 'penalty': 'l1'}, {'C': 0.1, 'penalty': 'l2'},
+#    {'C': 1,   'penalty': 'l1'}, {'C': 1,   'penalty': 'l2'}]
+```
 
-> **All contributors are expected to engage respectfully and constructively.** This is a welcoming space for developers at every experience level.
+### `create_cv_data_sets(X, y, cv, stratified)`
 
-### License
+Returns a list of `(X_train, y_train, X_val, y_val)` tuples — one per fold. Uses `StratifiedKFold` by default for classification, `KFold` when `stratified=False`.
 
-This project is licensed under the **MIT License**. See the [LICENSE](./LICENSE) file for the full license text.
+### `get_model_score(model, X_val, y_val, scoring)`
 
-You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of this software, subject to the conditions of the MIT License.
+Evaluates a fitted model against a single metric. Raises `ValueError` for unsupported metric names.
+
+---
+
+## 🚧 Project Status & Roadmap
+
+> ⚠️ **Early-stage project.** `EliminationSearchCV` is functional but still at an early stage — the algorithm, API, and supported features will evolve significantly.
+> More scorers, parallel execution (`n_jobs`), and richer result attributes are on the roadmap.
+> **Read the [CHANGELOG](./CHANGELOG.md)** to follow what changes between versions, and **watch / ⭐ the repo** to be notified of new releases.
+
+### ✅ Implemented
+- Core `EliminationSearchCV` class with `fit()`, `best_params_`, `best_score_`, `best_estimator_`
+- Round 1: per-parameter isolation and elimination
+- Rounds 2+: global combination ranking and elimination
+- Cross-validated fold creation (`StratifiedKFold` / `KFold`)
+- Invalid combination handling (score `0.0`)
+- Scoring utilities for 5 metrics
+
+### 🔨 In Progress / Planned
+- `cv_results_` attribute (per-fold score breakdown)
+- `n_jobs` parallel evaluation via `joblib`
+- `verbose` logging parameter
+- `refit` flag (opt-out of best-estimator refit)
+- Scikit-Learn `BaseEstimator` compatibility (`get_params` / `set_params`)
+- Full `pytest` test suite
+- PyPI publication (`v0.1.0`)
+- Sphinx / MkDocs API documentation
+
+---
+
+## 🤝 Contributing
+
+Contributions of any size are welcome — from fixing a typo in the docs to implementing `n_jobs` parallel fitting.
+
+1. **Read [CONTRIBUTING.md](./CONTRIBUTING.md)** for setup instructions, branch naming, and PR checklist.
+2. **Browse open issues** at [github.com/thisal-d/elimination-search-cv/issues](https://github.com/thisal-d/elimination-search-cv/issues)
+3. **Open an issue** before starting significant work — aligns design and avoids duplicate effort.
+4. **Fork → feature branch → PR** against `main` (e.g. `feat/n-jobs-parallel`).
+5. PRs should include tests and clean docstrings.
+
+Not ready to code? You can still help by:
+- ⭐ Starring the repo to boost visibility
+- Reporting bugs or missing features via [GitHub Issues](https://github.com/thisal-d/elimination-search-cv/issues)
+- Sharing benchmarks or datasets where elimination behaves unexpectedly
+
+---
+
+## 📜 Changelog
+
+| Version | Summary |
+|---|---|
+| [v0.0.1](./docs/changelogs/v0.0.1.md) | Initial working implementation: elimination rounds, cross-validated scoring, `best_params_`, invalid combo handling |
+
+Full release history: [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
 
 ---
 
 <p align="center">
-  Started by <a href="https://github.com/thisal-d">Thisal-D</a>. A work in progress.
+  Made with ❤️ by <a href="https://github.com/thisal-d">Thisal-D</a><br>
+  <sub>If you find this project interesting or useful, please consider giving it a ⭐ — it really does help keep things moving.</sub>
 </p>
